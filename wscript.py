@@ -1,8 +1,82 @@
 #! /usr/bin/env python
-import subprocess
+import os
+'''
+https://waf.io/apidocs/tutorial.html
+python3 waf configure
+'''
+TO_DEBUG = False
 
-def default(context):
+
+def log(msg):
+    if TO_DEBUG:
+        print(msg)
+
+
+class Node():
+    def __init__(self, name):
+        self.fullpath = name
+        self._name = name
+        self._text = None
+
+        if '/' in name:
+            names = self._name.split('/')
+            self._name = names[len(names) - 1]
+
+    @property
+    def name(self):
+        return self
+
+    @property
+    def text(self):
+        log(['self.fullpath', self.fullpath])
+
+        if not os.path.isfile(self.fullpath):
+            return
+
+        with open(self.fullpath, 'r') as file:
+            text = file.read()  # .replace('\n', '').replace('*/', '*/;')  # .replace("\'", "'")  # .replace('\t', ' ')
+            return text
+
+    @text.setter
+    def text(self, x):
+        if x:
+            self.to_file(x)
+
+    @text.deleter
+    def text(self):
+        del self._text
+
+    def to_file(self, data):
+        if not os.path.isfile(self.fullpath):
+            return
+
+        with open(self.fullpath, "w") as f:
+            f.truncate(0)
+            f.write(data)
+            f.close()
+
+    def __sub__(self, b):
+        return Node(self.fullpath.rstrip(b))
+
+    def __add__(self, b):
+        n = Node(self.fullpath + str(b))
+        return n
+
+    def __str__(self):
+        return self._name
+
+
+def configure(context):
+    if not hasattr(context, 'Node'):
+        context.Node = Node
+
     minifyfiles(context)
+
+
+class Context():
+    def Node(self, f):
+        return Node(f)
+
 
 def minifyfiles(context):
     src = context.Node('src/jSignature.js')
@@ -12,50 +86,56 @@ def minifyfiles(context):
 
     # Compressing jSignature + some plugins into one mini
     minified = distfolder + src.name - '.js' + '.min.js'
-    print("=== Compressing " + src.name + " into " + minified.fullpath)
+    log("=== Compressing " + str(src.name) + " into " + minified.fullpath)
     minified.text = compress_with_closure_compiler(
-        src.text.replace(
-            "${buildDate}", timeUTC()
-        ).replace(
-            "${commitID}", getCommitIDstring()
-        ) + \
-        (pluginsfolder + 'jSignature.UndoButton.js').text + \
-        # context.Node('plugins/signhere/jSignature.SignHere.js').text + \
-        (pluginsfolder + 'jSignature.CompressorBase30.js').text + \
-        (pluginsfolder + 'jSignature.CompressorSVG.js').text
-    )
+        " ".join([
+            src.text.replace(
+                "${buildDate}", timeUTC()
+            ).replace(
+                "${commitID}", getCommitIDstring()
+            ),
+            (pluginsfolder + 'jSignature.UndoButton.js').text,
+            # context.Node('plugins/signhere/jSignature.SignHere.js').text + \
+            (pluginsfolder + 'jSignature.CompressorBase30.js').text,
+            (pluginsfolder + 'jSignature.CompressorSVG.js').text
+        ]))
 
     # wrapping that mini into "jQuery.NoConflict" prefix + suffix
     # and hosting it as separate mini
     (minified - '.js' + '.noconflict.js').text = ";(function($){\n" + minified.text + "\n})(jQuery);"
 
+
 def timeUTC():
     import datetime
     return datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M")
 
+
 def getCommitIDstring():
     import subprocess
-
     if not subprocess.check_output:
         # let's not bother emulating it. Not important
         return ""
     else:
-        return "commit ID " + subprocess.check_output(
-            [
+        return "commit ID " + str(
+            subprocess.check_output([
                 'git'
                 , 'rev-parse'
                 , 'HEAD'
             ]
-        ).strip()
+        ).strip())
+
 
 def compress_with_closure_compiler(code, compression_level = None):
     '''Sends text of JavaScript code to Google's Closure Compiler API
     Returns text of compressed code.
     '''
+    log(['code', code])
     # script (with some modifications) from 
     # https://developers.google.com/closure/compiler/docs/api-tutorial1
 
-    import httplib, urllib, sys
+    from http import client as httplib
+
+    import urllib
 
     compression_levels = [
         'WHITESPACE_ONLY'
@@ -68,7 +148,7 @@ def compress_with_closure_compiler(code, compression_level = None):
 
     # Define the parameters for the POST request and encode them in
     # a URL-safe format.
-    params = urllib.urlencode([
+    params = urllib.parse.urlencode([
         ('js_code', code)
         , ('compilation_level', compression_level)
         , ('output_format', 'json')
@@ -81,7 +161,7 @@ def compress_with_closure_compiler(code, compression_level = None):
       ])
 
     # Always use the following value for the Content-type header.
-    headers = { "Content-type": "application/x-www-form-urlencoded" }
+    headers = {"Content-type": "application/x-www-form-urlencoded"}
     conn = httplib.HTTPSConnection('closure-compiler.appspot.com')
     conn.request('POST', '/compile', params, headers)
     response = conn.getresponse()
@@ -92,7 +172,7 @@ def compress_with_closure_compiler(code, compression_level = None):
     compressedcode = response.read()
     conn.close()
 
-    import json # needs python 2.6+ or simplejson module for earlier
+    import json  # needs python 2.6+ or simplejson module for earlier
     parts = json.loads(compressedcode)
 
     if 'errors' in parts:
@@ -108,7 +188,14 @@ def compress_with_closure_compiler(code, compression_level = None):
             )
         raise Exception(''.join(prettyerrors))
 
+    log(["parts", parts])
+    log(["parts['statistics']", parts['statistics']])
+
     return parts['compiledCode']
 
+
 if __name__ == '__main__':
-    print("This is a Wak build automation tool script. Please, get Wak on GitHub and run it against the folder containing this automation script.")
+    context = Context()
+    configure(context)
+    # print("This is a Wak build automation tool script. Please, get Wak on GitHub and run it against the folder containing this automation script.")
+    print('Done')
